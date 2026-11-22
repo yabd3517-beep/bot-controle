@@ -1,0 +1,5 @@
+1.0.1
+required
+sha256:2ae52c5ee7798150e058af8a0a7c981ff585e81d50287db136cc2c10500b4d44
+- Fixed the emergency stop: move the mouse to the top-left corner of the screen to stop
+ 
