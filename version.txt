@@ -1,5 +1,5 @@
-1.0.1
+1.0.2
 required
-sha256:2ae52c5ee7798150e058af8a0a7c981ff585e81d50287db136cc2c10500b4d44
-- Fixed the emergency stop: move the mouse to the top-left corner of the screen to stop
- 
+sha256:e2028f1b70eaece46b55ab41109b93300052526bc18c85424038146aa4a2302b
+exe_sha256:af465adfee9c74a79d61a8e2a458853bd76a3ad90d4446a2502bb5fed2fac44d
+- First real exe with auto-update

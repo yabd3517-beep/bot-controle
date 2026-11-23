@@ -63,9 +63,10 @@ REMOTE_PASSWORD_URL = "https://raw.githubusercontent.com/yabd3517-beep/bot-contr
 
 
 # 4. Auto-update (every device updates itself from GitHub when the bot starts)
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 REMOTE_VERSION_URL = "https://raw.githubusercontent.com/yabd3517-beep/bot-controle/refs/heads/main/version.txt"
 REMOTE_SCRIPT_URL = "https://raw.githubusercontent.com/yabd3517-beep/bot-controle/refs/heads/main/bot.py"
+REMOTE_EXE_URL = "https://github.com/yabd3517-beep/bot-controle/releases/download/latest/bot.exe"
 
 
 def parse_version(text):
@@ -85,13 +86,15 @@ def fetch_release_info():
   r = requests.get(REMOTE_VERSION_URL, timeout=8)
   r.raise_for_status()
   lines = [l.strip() for l in r.text.splitlines() if l.strip()]
-  info = {"version": lines[0], "required": True, "sha256": None, "notes": []}
+  info = {"version": lines[0], "required": True, "sha256": None, "exe_sha256": None, "notes": []}
   for l in lines[1:]:
     low = l.lower()
     if low in ("required", "optional"):
       info["required"] = low == "required"
     elif low.startswith("sha256:"):
       info["sha256"] = low.split(":", 1)[1].strip()
+    elif low.startswith("exe_sha256:"):
+      info["exe_sha256"] = low.split(":", 1)[1].strip()
     else:
       info["notes"].append(l)
   return info
@@ -113,6 +116,20 @@ def download_update(info):
   return data
 
 
+def download_exe_update(info):
+  """Downloads the new bot.exe and checks it BEFORE anything is replaced."""
+  if not info["exe_sha256"]:
+    raise ValueError("version.txt has no exe_sha256 line (the owner has not published an .exe release yet)")
+  r = requests.get(REMOTE_EXE_URL, timeout=60)
+  r.raise_for_status()
+  data = r.content
+  if len(data) < 100_000:                      # a real PyInstaller/Nuitka exe is always much bigger
+    raise ValueError("the downloaded file is too small to be the real program")
+  if hashlib.sha256(data).hexdigest() != info["exe_sha256"]:
+    raise ValueError("the downloaded file does not match its checksum (GitHub may still be updating)")
+  return data
+
+
 def apply_update(data):
   script = os.path.abspath(__file__)
   new_path = script + ".new"
@@ -130,9 +147,35 @@ def restart_bot(new_version):
   sys.exit(code)
 
 
+def apply_exe_update_and_restart(data, new_version):
+  """Writes the new .exe next to the running one, then hands off to a tiny helper
+  script that waits for this process to exit, swaps the files, and restarts it.
+  Windows will not let us overwrite an .exe while it is running, so the swap
+  has to happen after this process has already closed."""
+  exe_path = os.path.abspath(sys.executable)
+  new_path = exe_path + ".new"
+  with open(new_path, "wb") as f:
+    f.write(data)
+  bak_path = exe_path + ".bak"
+  helper = exe_path + ".update.bat"
+  with open(helper, "w", encoding="utf-8") as f:
+    f.write(
+        "@echo off\r\n"
+        "timeout /t 2 /nobreak > nul\r\n"
+        f'del /f /q "{bak_path}" 2>nul\r\n'
+        f'move /y "{exe_path}" "{bak_path}" > nul\r\n'
+        f'move /y "{new_path}" "{exe_path}" > nul\r\n'
+        "set BOT_JUST_UPDATED=" + new_version + "\r\n"
+        f'start "" "{exe_path}"\r\n'
+        f'del /f /q "%~f0"\r\n'
+    )
+  subprocess.Popen(["cmd", "/c", helper], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                   | getattr(subprocess, "DETACHED_PROCESS", 0))
+  sys.exit(0)
+
+
 def check_for_update():
-  if getattr(sys, "frozen", False):
-    return  # built as an .exe: self-update is not supported
+  frozen = getattr(sys, "frozen", False)
   try:
     info = fetch_release_info()
   except Exception as e:
@@ -154,8 +197,13 @@ def check_for_update():
     return
 
   try:
-    data = download_update(info)
-    apply_update(data)
+    if frozen:
+      data = download_exe_update(info)
+      print("Update downloaded. Restarting...\n")
+      apply_exe_update_and_restart(data, info["version"])      # this exits the process itself
+    else:
+      data = download_update(info)
+      apply_update(data)
   except Exception as e:
     print(f"Update failed: {e}\nNothing was changed.")
     if info["required"]:
